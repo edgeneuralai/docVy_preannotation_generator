@@ -4,20 +4,75 @@ from uuid import uuid4
 from PIL import Image
 import json
 import os
-import torch
+#import torch
 from pdf2image import convert_from_path
 from model import PPOCRModelWrapper
+from multiprocessing import Pool
 
 INPUT_DIR = os.environ["INPUT_DIR"]
 split_count = int(input("Enter number of splits:"))
 
 ocr = PPOCRModelWrapper()
 
+def generate_predictions(image_path):
+    global ocr
+    base_path = image_path.split("/")[-1]
+    out = {
+        "data":{
+            "ocr":f"http://localhost:8000/{base_path}"
+        },
+        "predictions":[
+            {
+                "result":[],
+                "score":0.98
+            }
+        ]
+    }
+
+    pil_image = Image.open(image_path)
+
+    result = ocr.batch_predict(
+        [pil_image]
+    )[0]
+    #print(result)
+    width, height = pil_image.size
+    pil_image.close()
+    for box, text in zip(json.loads(result["PageJson"])["word_bbox"], json.loads(result["PageJson"])["words"]):
+
+        x0,y0,x1,y1 = box
+             
+        w = x1-x0
+        h = y1-y0
+    
+        bbox = {
+            "x": 100* x0 ,#/ width,
+            "y": 100* y0 ,#/ height,
+            "width":  100 * w,# / width, 
+            "height": 100 * h,#/ height, 
+            "rotation":0}
+    
+        region_id = str(uuid4())[:10]
+        score = 0.98
+    
+        bbox_result = {
+                'id': region_id, 'from_name': 'bbox', 'to_name': 'image', 'type': 'rectangle',
+                'value': bbox}
+        transcription_result = {
+                'id': region_id, 'from_name': 'transcription', 'to_name': 'image', 'type': 'textarea',
+                'value': dict(text=[text], **bbox), 'score': score}
+    
+        out["predictions"][0]["result"].extend([bbox_result, transcription_result])
+        #print(out)
+        #print("!!!!!!!!!")
+    return out
+
+pool = Pool()
+
 for i, dir in enumerate(glob.glob(os.path.join(INPUT_DIR, "*"))):
     if not os.path.isdir(dir) :
         continue
 
-    tasks = []
+    #tasks = []
 
     FOLDER_PATH = os.path.join(INPUT_DIR, dir)
 
@@ -37,56 +92,8 @@ for i, dir in enumerate(glob.glob(os.path.join(INPUT_DIR, "*"))):
 
     IMAGES = glob.glob(os.path.join(IMAGES_DIR, "*.jpg"))
 
-    for image_path in IMAGES :
-        base_path = image_path.split("/")[-1]
-        out = {
-            "data":{
-                "ocr":f"http://localhost:8000/{base_path}"
-            },
-            "predictions":[
-                {
-                    "result":[],
-                    "score":0.98
-                }
-            ]
-        }
-
-        pil_image = Image.open(image_path)
-
-        result = ocr.batch_predict(
-            [pil_image]
-        )[0]
-        #print(result)
-        width, height = pil_image.size
-        pil_image.close()
-        for box, text in zip(json.loads(result["PageJson"])["word_bbox"], json.loads(result["PageJson"])["words"]):
-
-           x0,y0,x1,y1 = box
-                
-           w = x1-x0
-           h = y1-y0
-   
-           bbox = {
-               "x": 100* x0 ,#/ width,
-               "y": 100* y0 ,#/ height,
-               "width":  100 * w,# / width, 
-               "height": 100 * h,#/ height, 
-               "rotation":0}
-   
-           region_id = str(uuid4())[:10]
-           score = 0.98
-   
-           bbox_result = {
-                   'id': region_id, 'from_name': 'bbox', 'to_name': 'image', 'type': 'rectangle',
-                   'value': bbox}
-           transcription_result = {
-                   'id': region_id, 'from_name': 'transcription', 'to_name': 'image', 'type': 'textarea',
-                   'value': dict(text=[text], **bbox), 'score': score}
-   
-           out["predictions"][0]["result"].extend([bbox_result, transcription_result])
-           #print(out)
-           #print("!!!!!!!!!")
-        tasks.append(out)
+    #tasks = [generate_predictions(image) for image in IMAGES]
+    tasks = pool.map(generate_predictions, IMAGES)
 
     #os.system(f"rm {FOLDER_PATH}/*.json")
     
